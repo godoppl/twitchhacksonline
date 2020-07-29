@@ -1,24 +1,15 @@
-# twitchhacksonline
-Bot for 'Twitch Hacks X' streams
+# twitchhacks
+Bot for Twitch Hacks streams
 
+# Installation Linux
 
-## What is it?
-
-The bot takes emotes written in twitch chat and sends it to a keyboard server (listener) that types keys
-
-
-## Installation
-
-Pre-requisites:
-python 3.7+
-python3-pip
-
-1. Install dependancies with: `pip install -r requirements.txt`
-
-2. Fill in settings.py with your API keys and such.
-    You need a twitch account for the bot and a streamlabs account to receive information about donations/cheers etc.
-
-3. The emote translation is setup in the ./state/saved/emotes.csv file
-    You can make a new random emote selection by using the ./state/saved/randomize.py script
-
+I have provided vboxapi v6.1.12 in this repo, but the original comes from here:
+https://www.virtualbox.org/wiki/Downloads (If you need a newer version)
+```
+cd vboxapi/sdk/installer
+export VBOX_INSTALL_PATH='/usr/lib/virtualbox'
+python vboxapisetup.py install
+cd ../../..
+pip install -r requirements.txt
+```
 

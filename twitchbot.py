@@ -1,146 +1,226 @@
+# twitchhacks.online
 # "Twitch Hacks Online"
 # 2020 - Frank Godo
 
+import json
 import logging
+from state import State
+from vbox_srv import VirtualBoxSrv, KEYBOARD_KEYS
 from twitchio.ext import commands
-from settings import BOT_NICK, CHANNEL_NAME, IRC_TOKEN, GUESS, FOLLOWERS_ONLY
+from settings import BOT_NICK, CHANNEL_NAME, CHANNEL_ID, IRC_TOKEN, CLIENT_ID, CLIENT_SECRET, CLIENT_TOKEN,\
+    API_TOKEN, SUBSCRIPTIONS, MAX_FREEBIES
 
 logger = logging.getLogger(__name__)
+SPECIAL_KEYS = ' | '.join([x for x in KEYBOARD_KEYS if len(x) > 1])
 
 
 class TwitchBot(commands.Bot):
-    def __init__(self, state, kbd_client):
-        self.state = state
-        self.kbd_client = kbd_client
-        self.uncover_by_guess = GUESS
-        self.followers_only = FOLLOWERS_ONLY
-        super().__init__(irc_token=IRC_TOKEN, nick=BOT_NICK, prefix='!', initial_channels=[CHANNEL_NAME])
-        logger.info("TwitchBot initialized! Guessing is %s, Followers only is %s",
-                    "on" if GUESS else "off",
-                    "on" if FOLLOWERS_ONLY else "off")
+    def __init__(self):
+        self.state = State(CLIENT_ID, CHANNEL_ID)
+        self.box = VirtualBoxSrv()
+        super().__init__(irc_token=IRC_TOKEN,
+                         nick=BOT_NICK,
+                         client_id=CLIENT_ID,
+                         client_secret=CLIENT_SECRET,
+                         api_token=API_TOKEN,
+                         prefix='!',
+                         initial_channels=[CHANNEL_NAME])
+        logger.info("TwitchBot initialized!")
 
     async def event_ready(self):
         print(f'Ready | {self.nick}')
+        self.listener = await self.pubsub_subscribe(CLIENT_TOKEN, *SUBSCRIPTIONS)
+
+    async def event_raw_pubsub(self, data):
+        if data.get('type') == 'RESPONSE':
+            if data.get('error'):
+                logger.error("Failed to subscribe to %s", SUBSCRIPTIONS)
+            else:
+                logger.info("Subscribed to %s", SUBSCRIPTIONS)
+                channel = self.get_channel(CHANNEL_NAME)
+                await channel.send('Bot initialized! Type !help to learn how to interact with me')
+        elif data.get('type') == 'PONG':
+            pass
+        elif data.get('type') == 'reward-redeemed':
+            redemption = data.get('data').get('redemption')
+            user = redemption.get('display_name')
+            reward = redemption.get('reward').get('title')
+            print(f'{user} redeemed {reward}')
+        elif data.get('topic') == f'channel-bits-events-v2.{CHANNEL_ID}':
+            message = json.loads(data.get('message'))
+            username = message.get('user_name')
+            amount = message.get('bits_used')
+            print(f'{username} cheered {amount}')
+        else:
+            print(data)
 
     async def event_message(self, message):
         logger.debug("Received message: %s", message.content)
-        if message.author.name.lower() != self.nick.lower():
-            keys = self.state.get_keys(message.content, self.uncover_by_guess)
-            if keys:
-                self.kbd_client.send_keys(keys)
         await self.handle_commands(message)
 
     @commands.command(name='help')
     async def show_help(self, ctx):
         help_text = """
-            Type emotes in chat to press keys, all keys have a corresponding emote.
-            Try guessing emotes to figure out what key it corresponds to.
-            Lookup uncovered keys by using the !lookup command.
+            Use !t[ype] 'your text' to type text |
+            Use !e[xecute] 'your command' to execute commands (enter at end of line) |
+            Use !p[ress] [key(s)] to send special key commands (lists keys if no parameters) |
+            Use !release to release stuck modifier keys
             """
         await ctx.send(help_text)
 
-    @commands.command(name='commands')
-    async def list_commands(self, ctx):
-        commands = """
-            Bot commands:
-            !lookup - Lookup keys (if uncovered) |
-            !keys - List uncovered keys |
-            !task - Show next task |
-            !uncover - Uncover more keys
-            """
-        await ctx.send(commands)
-
-    @commands.command(name='keys')
-    async def list_keys(self, ctx):
-        keys += "Lookup uncovered keys by using the !lookup command"
-        keys += " | " + self.state.list_uncovered_keys()
-        await ctx.send(keys)
-
-    @commands.command(name='task')
-    async def next_task(self, ctx):
-        task = self.state.next_task()
-        await ctx.send(task)
-
-    @commands.command(name='lookup')
-    async def key_lookup(self, ctx, *args):
-        translated = []
-        for key in args:
-            only_if_uncovered = not ctx.author.is_mod
-            emote = self.state.get_emote_by_key(key, only_if_uncovered)
-            if emote:
-                translated.append(str(emote))
+    async def can_interact(self, ctx):
+        name = ctx.author.name
+        if ctx.author.is_mod:
+            return True
+        elif self.state.is_rejected(name):
+            return False
+        elif self.state.get_hotseat() and self.state.get_hotseat() != name:
+            await ctx.send(f"Can't interact while {self.state.get_hotseat()} is in the hotseat!")
+            return False
+        elif self.state.is_allowed(name):
+            return True
+        elif self.state.is_follower(name):
+            return True
+        else:
+            following = await self.get_follow(ctx.author.id, CHANNEL_ID)
+            if following:
+                self.state.add_follower(name)
+                return True
+            freebies = self.state.update_noob(name)
+            if freebies < MAX_FREEBIES:
+                return True
             else:
-                translated.append(f"? = [{key}]")
-        await ctx.send(" | ".join(translated))
+                await ctx.send(f"{name}: please follow the channel to continue interacting")
+                return False
 
-    @commands.command(name='uncover')
-    async def show_uncover(self, ctx, *args):
-        donate = """
-            Use channel points, bits or donations to uncover keys |
-            50 bits to uncover a random key |
-            100 bits uncover a specific key (put key as donation message)
-            """
-        try:
-            if len(args) > 0 and ctx.author.is_mod:
-                if args[0] == 'random':
-                    uncovered = str(self.state.uncover_random_emote())
-                else:
-                    uncovered = " | ".join([str(obj) for obj in self.state.uncover_keys(args)])
-                await ctx.send(f"Uncovered: {uncovered}")
-            else:
-                await ctx.send(donate)
-        except (ValueError, IndexError, AttributeError):
-            await ctx.send(donate)
-            logger.exception()
-
-    @commands.command(name='cover')
-    async def cover_keys(self, ctx, *args):
-        try:
-            if len(args) > 0 and ctx.author.is_mod:
-                covered = " | ".join([str(obj) for obj in self.state.cover_keys(args)])
-                await ctx.send(f"Covered: {covered}")
-        except (ValueError, IndexError, AttributeError):
-            logger.exception()
-
-    @commands.command(name='type')
+    @commands.command(name='type', aliases=['t'])
     async def type_input(self, ctx, *args):
+        if not args:
+            return
         try:
-            if len(args) > 0 and (ctx.author.is_mod or 'vip' in ctx.author.badges.keys()):
-                command = ' '.join(args)
-                self.kbd_client.send_command(command)
-                logger.debug("Executed %s", command)
-                await ctx.send(f"Running: '{command}'")
-        except (ValueError, IndexError, AttributeError):
-            logger.exception()
+            if await self.can_interact(ctx):
+                prefix = ctx.message.content.split(' ')[0]
+                command = ctx.message.content[len(prefix)+1:]
+                if self.box.type(command) is not False:
+                    logger.debug("Typing %s", command)
+                    await ctx.send(f"Typing: '{command}'"[:500])
+                else:
+                    await ctx.send("Instance is not running, attempting to restart it...")
+                    self.box.launch()
+        except (ValueError, IndexError, AttributeError) as e:
+            logger.exception(e)
 
-    @commands.command(name='reload')
-    async def reload_state(self, ctx):
+    @commands.command(name='execute', aliases=['e'])
+    async def execute_line(self, ctx, *args):
         try:
-            if ctx.author.is_mod:
-                self.state.read_emotes()
-                logger.info("Reloaded state")
-                await ctx.send("Reloaded emotes in state")
-        except AttributeError:
-            pass
+            if await self.can_interact(ctx):
+                if args:
+                    prefix = ctx.message.content.split(' ')[0]
+                    command = ctx.message.content[len(prefix)+1:]
+                    if self.box.type(command) is not False:
+                        self.box.send('enter')
+                        logger.debug("Executing %s", command)
+                        await ctx.send(f"Executing: '{command}'"[:500])
+                    else:
+                        await ctx.send("Instance is not running, attempting to restart it...")
+                        self.box.launch()
+                else:
+                    command = self.box.send('enter')
+                    if command is not None:
+                        logger.debug("Pressing %s", command)
+                        await ctx.send("Pressing 'ENTER'")
 
-    @commands.command(name='enable')
-    async def enable_feature(self, ctx, *args):
-        try:
-            if ctx.author.is_mod:
-                if 'guess' in args:
-                    logger.info("Enabling guess mode")
-                    self.uncover_by_guess = True
-                    await ctx.send("Users can now uncover by guessing emotes")
-        except AttributeError:
-            pass
+        except (ValueError, IndexError, AttributeError) as e:
+            logger.exception(e)
 
-    @commands.command(name='disable')
-    async def disable_feature(self, ctx, *args):
+    @commands.command(name='press', aliases=['p'])
+    async def press_keys(self, ctx, *args):
         try:
-            if ctx.author.is_mod:
-                if 'guess' in args:
-                    self.uncover_by_guess = False
-                    logger.info("Disabling guess mode")
-                    await ctx.send("Users can no longer uncover by guessing emotes")
-        except AttributeError:
-            pass
+            if await self.can_interact(ctx):
+                if len(args) > 0:
+                    command = self.box.send(*args)
+                    if command is not None:
+                        logger.debug("Pressing %s", command)
+                        await ctx.send(f"Pressing keys: '{command}'")
+                    else:
+                        await ctx.send("Instance is not running, attempting to restart it...")
+                        self.box.launch()
+                else:
+                    await ctx.send(f"Special keys: {SPECIAL_KEYS}")
+        except (ValueError, IndexError, AttributeError) as e:
+            logger.exception(e)
+
+    @commands.command(name='release')
+    async def release_keys(self, ctx, *args):
+        if self.box.release():
+            await ctx.send('Released all modifier keys')
+        else:
+            await ctx.send("Instance is not running, interaction is disabled")
+
+    @commands.command(name='hotseat', aliases=['hs'])
+    async def hotseat_user(self, ctx, *args):
+        if not ctx.author.is_mod:
+            return
+        if len(args) > 0:
+            self.state.hotseat(args[0])
+            await ctx.send(f"{args[0]} is now in the hotseat, and is the only one that can interact with the machine")
+        else:
+            self.state.hotseat(None)
+            await ctx.send("Hotseat is empty, anyone with the permission can interact")
+
+    @commands.command(name='allow')
+    async def allow_user(self, ctx, *args):
+        if not ctx.author.is_mod:
+            return
+        added = []
+        for user in args:
+            if not self.state.is_allowed(user):
+                self.state.add_allowed(user)
+                logger.info('Added %s to allowed list', user)
+                added.append(user)
+        if added:
+            added_users = ', '.join(added)
+            await ctx.send(f"Added users: {added_users}")
+        else:
+            await ctx.send("No users could be added!")
+
+    @commands.command(name='remove')
+    async def remove_user(self, ctx, *args):
+        if not ctx.author.is_mod:
+            return
+        removed = []
+        for user in args:
+            self.state.remove_user(user)
+            removed.append(user)
+        if removed:
+            removed_users = ', '.join(removed)
+            await ctx.send(f"Removed users from all lists: {removed_users}")
+        else:
+            await ctx.send("No users could be removed!")
+
+    @commands.command(name='reject')
+    async def reject_user(self, ctx, *args):
+        if not ctx.author.is_mod:
+            return
+        added = []
+        for user in args:
+            if not self.state.is_rejected(user):
+                self.state.add_rejected(user)
+                logger.info('Added %s to rejected list', user)
+                added.append(user)
+        if added:
+            added_users = ', '.join(added)
+            await ctx.send(f"Added users: {added_users}")
+        else:
+            await ctx.send("No users could be added!")
+
+    @commands.command(name='stop')
+    async def shut_down(self, ctx, *args):
+        try:
+            if ctx.author.name.lower() in [CHANNEL_NAME, BOT_NICK]:
+                if args and args[0] == '2':
+                    pass
+                    # Shut down stream
+                self.box.shut_down()
+        except (ValueError, IndexError, AttributeError) as e:
+            logger.exception(e)
