@@ -3,6 +3,8 @@ Bot for Twitch Hacks streams
 
 # Installation Linux
 
+### Requires python 3.7+
+
 I have provided vboxapi v6.1.12 in this repo, but the original comes from here:
 https://www.virtualbox.org/wiki/Downloads (If you need a newer version)
 ```
