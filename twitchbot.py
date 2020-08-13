@@ -217,10 +217,22 @@ class TwitchBot(commands.Bot):
     @commands.command(name='stop')
     async def shut_down(self, ctx, *args):
         try:
-            if ctx.author.name.lower() in [CHANNEL_NAME, BOT_NICK]:
-                if args and args[0] == '2':
-                    pass
-                    # Shut down stream
-                self.box.shut_down()
+            if args and ctx.author.is_mod:
+                if args[0] == 'restore':
+                    self.box.shut_down(restore=True)
+                    await ctx.send("Most recent snapshot has been restored")
+                if args[0] == 'halt':
+                    self.box.shut_down()
+                    await ctx.send("System is now in 'powered off' state")
+            else:
+                if ctx.author.name.lower() in [CHANNEL_NAME, BOT_NICK]:
+                    self.box.shut_down(save=True)
+                    await ctx.send("System is now in 'saved' state")
         except (ValueError, IndexError, AttributeError) as e:
             logger.exception(e)
+
+    @commands.command(name='snap')
+    async def snapshot(self, ctx, *args):
+        if ctx.author.is_mod:
+            self.box.snapshot(ctx.author.name)
+        await ctx.send("Snapshot created")
