@@ -235,4 +235,4 @@ class TwitchBot(commands.Bot):
     async def snapshot(self, ctx, *args):
         if ctx.author.is_mod:
             self.box.snapshot(ctx.author.name)
-        await ctx.send("Snapshot created")
+            await ctx.send("Snapshot created")
