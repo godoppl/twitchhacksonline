@@ -48,12 +48,12 @@ class VirtualBoxSrv():
                 progress = self.session.console.power_down()
             progress.wait_for_completion()
         if restore:
-            snapshot = self.session.machine.current_snapshot()
+            snapshot = self.session.machine.current_snapshot
             progress = self.session.machine.restore_snapshot(snapshot)
             progress.wait_for_completion()
 
     def snapshot(self, username):
-        progress = self.session.machine.take_snapshot(f"{int(time.time())}", f"Taken by {username}", True)
+        progress, _ = self.session.machine.take_snapshot(f"{int(time.time())}", f"Taken by {username}", True)
         progress.wait_for_completion()
 
     def is_running(self):
