@@ -1,3 +1,11 @@
+# DEPRECATED
+
+New versions and updates to 'Twitch Hacks Online' are now available on:
+https://github.com/twitchhacksonline/twitchbot
+
+
+
+
 # twitchhacks
 Bot for Twitch Hacks streams
 

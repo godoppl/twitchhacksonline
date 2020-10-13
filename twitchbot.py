@@ -41,16 +41,51 @@ class TwitchBot(commands.Bot):
                 await channel.send('Bot initialized! Type !help to learn how to interact with me')
         elif data.get('type') == 'PONG':
             pass
-        elif data.get('type') == 'reward-redeemed':
-            redemption = data.get('data').get('redemption')
-            user = redemption.get('display_name')
-            reward = redemption.get('reward').get('title')
-            print(f'{user} redeemed {reward}')
-        elif data.get('topic') == f'channel-bits-events-v2.{CHANNEL_ID}':
-            message = json.loads(data.get('message'))
-            username = message.get('user_name')
-            amount = message.get('bits_used')
-            print(f'{username} cheered {amount}')
+        elif data.get('type') == 'MESSAGE':
+            try:
+                topic = data.get('data').get('topic')
+                message = json.loads(data.get('data').get('message'))
+                if topic == f'channel-points-channel-v1.{CHANNEL_ID}' and message.get('type') == 'reward-redeemed':
+                    redemption = message.get('data').get('redemption')
+                    user = redemption.get('user').get('display_name')
+                    reward = redemption.get('reward').get('title')
+                    logger.info(f'{user} redeemed {reward}')
+                    channel = self.get_channel(CHANNEL_NAME)
+                    if reward == 'Get the hot seat!':
+                        # Award the hotseat for 5 minutes
+                        self.state.hotseat(user, expire=True)
+                        await channel.send(
+                            f"{user} is now in the hotseat, and has exclusive control for the next 5 minutes"
+                        )
+                    elif reward == 'Hints':
+                        # Ask Agent Random for a hint
+                        await channel.send(f'Hints will be supplied by {CHANNEL_NAME}')
+                elif topic == f'channel-bits-events-v2.{CHANNEL_ID}':
+                    username = message.get('data').get('user_name')
+                    amount = message.get('data').get('bits_used')
+                    logger.info(f'{username} cheered {amount}')
+                elif topic == f'channel-subscribe-events-v1.{CHANNEL_ID}':
+                    username = message.get('display_name')
+                    amount = message.get('cumulative_months')
+                    gift = message.get('is_gift')
+                    logger.info(f'{username} has subscribed for {amount} months')
+                    if not gift:
+                        channel = self.get_channel(CHANNEL_NAME)
+                        if amount == 1:
+                            await channel.send(
+                                f'{username} is a new subscriber. Thank you!'
+                            )
+                        else:
+                            await channel.send(
+                                f'{username} has been subscribed for a total of {amount} months. Thank you!'
+                            )
+                elif topic == f'chat_moderator_actions.{CHANNEL_ID}':
+                    action = message.get('data').get('moderation_action')
+                    username = message.get('data').get('created_by')
+                    args = message.get('data').get('args')
+                    logger.info(f'{username} moderated {action}: {args}')
+            except (ValueError, KeyError):
+                logger.exception("Unable to parse pubsub message")
         else:
             print(data)
 
@@ -58,24 +93,15 @@ class TwitchBot(commands.Bot):
         logger.debug("Received message: %s", message.content)
         await self.handle_commands(message)
 
-    @commands.command(name='help')
-    async def show_help(self, ctx):
-        help_text = """
-            Use !t[ype] 'your text' to type text |
-            Use !e[xecute] 'your command' to execute commands (enter at end of line) |
-            Use !p[ress] [key(s)] to send special key commands (lists keys if no parameters) |
-            Use !release to release stuck modifier keys
-            """
-        await ctx.send(help_text)
-
     async def can_interact(self, ctx):
         name = ctx.author.name
+        hotseat = self.state.get_hotseat()
         if ctx.author.is_mod:
             return True
         elif self.state.is_rejected(name):
             return False
-        elif self.state.get_hotseat() and self.state.get_hotseat() != name:
-            await ctx.send(f"Can't interact while {self.state.get_hotseat()} is in the hotseat!")
+        elif hotseat and hotseat != name and not self.state.is_hotseat_expired():
+            await ctx.send(f"Can't interact while {hotseat} is in the hotseat!")
             return False
         elif self.state.is_allowed(name):
             return True
@@ -93,6 +119,32 @@ class TwitchBot(commands.Bot):
                 await ctx.send(f"{name}: please follow the channel to continue interacting")
                 return False
 
+# Information commands
+    @commands.command(name='help')
+    async def show_help(self, ctx):
+        help_text = """
+            Use !t[ype] 'your text' to type text |
+            Use !e[xecute] 'your command' to execute commands (enter at end of line) |
+            Use !p[ress] [key(s)] to send special key commands (lists keys if no parameters) |
+            Use !release to release stuck modifier keys
+            """
+        await ctx.send(help_text)
+
+    @commands.command(name='objective', aliases=['obj', 'what'])
+    async def show_objective(self, ctx):
+        objective_text = """
+            Find flags in order to escalate privileges. Flags are 64char hexadecimal strings.
+            """
+        await ctx.send(objective_text)
+
+    @commands.command(name='source', aliases=['github', 'gh'])
+    async def show_source(self, ctx):
+        source_text = """
+            The source for this bot is here: https://github.com/godoppl/twitchhacksonline
+            """
+        await ctx.send(source_text)
+
+# Action commands
     @commands.command(name='type', aliases=['t'])
     async def type_input(self, ctx, *args):
         if not args:
@@ -157,6 +209,7 @@ class TwitchBot(commands.Bot):
         else:
             await ctx.send("Instance is not running, interaction is disabled")
 
+# User handling
     @commands.command(name='hotseat', aliases=['hs'])
     async def hotseat_user(self, ctx, *args):
         if not ctx.author.is_mod:
@@ -214,6 +267,7 @@ class TwitchBot(commands.Bot):
         else:
             await ctx.send("No users could be added!")
 
+# Virtualbox control
     @commands.command(name='stop')
     async def shut_down(self, ctx, *args):
         try:
