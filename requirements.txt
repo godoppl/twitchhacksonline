@@ -10,5 +10,5 @@ pkg-resources==0.0.0
 twitchio==1.1.0
 vboxapi==1.0
 virtualbox==2.0.0
-websockets==8.1
+websockets==9.1
 yarl==1.4.2
